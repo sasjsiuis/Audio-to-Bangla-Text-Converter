@@ -51,6 +51,17 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Start Guest/Local Storage Session
+  const handleStartGuestSession = () => {
+    localStorage.setItem("kantholipi_is_guest", "true");
+    setUser({
+      uid: "guest-user-id",
+      displayName: "অতিথি ব্যবহারকারী (লোকাল)",
+      email: "guest@local.storage",
+      photoURL: "",
+    });
+  };
+
   // Sync Auth States
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (authUser) => {
@@ -62,19 +73,45 @@ export default function App() {
           email: authUser.email,
           photoURL: authUser.photoURL,
         });
+        localStorage.removeItem("kantholipi_is_guest");
       } else {
         setFirebaseUser(null);
-        setUser(null);
-        setTranscriptions([]);
+        const isGuestFlag = localStorage.getItem("kantholipi_is_guest") === "true";
+        if (isGuestFlag) {
+          setUser({
+            uid: "guest-user-id",
+            displayName: "অতিথি ব্যবহারকারী (লোকাল)",
+            email: "guest@local.storage",
+            photoURL: "",
+          });
+        } else {
+          setUser(null);
+          setTranscriptions([]);
+        }
       }
       setLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
-  // Securely fetch transcriptions using dual query streams (satisfies list query security)
+  // Securely fetch transcriptions using dual query streams (satisfies list query security) or from localStorage
   useEffect(() => {
     if (!user || !user.email) return;
+
+    if (user.uid === "guest-user-id") {
+      const localData = localStorage.getItem("kantholipi_local_transcriptions");
+      if (localData) {
+        try {
+          setTranscriptions(JSON.parse(localData));
+        } catch (e) {
+          console.error("Failed to parse local transcriptions", e);
+          setTranscriptions([]);
+        }
+      } else {
+        setTranscriptions([]);
+      }
+      return;
+    }
 
     setTranscriptions([]);
 
@@ -133,14 +170,24 @@ export default function App() {
       await signInWithPopup(auth, googleProvider);
     } catch (err: any) {
       console.error("Login crashed:", err);
-      alert("গুগল সাইন-ইন সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।");
+      const useGuest = confirm("গুগল সাইন-ইন সম্পন্ন করা যায়নি। সম্ভবত ব্রাউজারের থার্ড-পার্টি কুকি ব্লক বা অথোরাইজড ডোমেইনের সমস্যা রয়েছে। আপনি কি সাইন-ইন না করেই 'গেস্ট বা অতিথি মোডে' কণ্ঠলিপি ব্যবহার করতে চান?");
+      if (useGuest) {
+        handleStartGuestSession();
+      }
     }
   };
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
-      setSelectedRecord(null);
+      localStorage.removeItem("kantholipi_is_guest");
+      if (user?.uid === "guest-user-id") {
+        setUser(null);
+        setTranscriptions([]);
+        setSelectedRecord(null);
+      } else {
+        await signOut(auth);
+        setSelectedRecord(null);
+      }
     } catch (err) {
       console.error("Logout error:", err);
     }
@@ -153,6 +200,30 @@ export default function App() {
 
     try {
       const defaultTitle = `বাণী রেকর্ড - ${new Date().toLocaleDateString("bn-BD")}`;
+
+      if (user.uid === "guest-user-id") {
+        const newRecord: TranscriptionRecord = {
+          id: "local-" + Date.now(),
+          title: defaultTitle,
+          text: transcriptionText,
+          audioDataUrl: audioUrl || "",
+          createdAt: { seconds: Math.floor(Date.now() / 1000) },
+          updatedAt: { seconds: Math.floor(Date.now() / 1000) },
+          ownerId: user.uid,
+          ownerName: user.displayName || "অতিথি ব্যবহারকারী",
+          ownerEmail: user.email || "",
+          collaborators: [],
+          isPublic: false,
+          audioDuration: duration
+        };
+
+        const existingLocal = localStorage.getItem("kantholipi_local_transcriptions");
+        const list: TranscriptionRecord[] = existingLocal ? JSON.parse(existingLocal) : [];
+        const newList = [newRecord, ...list];
+        localStorage.setItem("kantholipi_local_transcriptions", JSON.stringify(newList));
+        setTranscriptions(newList);
+        return;
+      }
       
       const newRecord = {
         title: defaultTitle,
@@ -179,6 +250,22 @@ export default function App() {
   // Callback: Update text value
   const handleUpdateText = async (id: string, nextText: string) => {
     try {
+      if (user?.uid === "guest-user-id") {
+        const updatedList = transcriptions.map(item => {
+          if (item.id === id) {
+            return {
+              ...item,
+              text: nextText,
+              updatedAt: { seconds: Math.floor(Date.now() / 1000) }
+            };
+          }
+          return item;
+        });
+        localStorage.setItem("kantholipi_local_transcriptions", JSON.stringify(updatedList));
+        setTranscriptions(updatedList);
+        return;
+      }
+
       const docRef = doc(db, "transcriptions", id);
       await updateDoc(docRef, {
         text: nextText,
@@ -192,6 +279,22 @@ export default function App() {
   // Callback: Update title
   const handleUpdateTitle = async (id: string, nextTitle: string) => {
     try {
+      if (user?.uid === "guest-user-id") {
+        const updatedList = transcriptions.map(item => {
+          if (item.id === id) {
+            return {
+              ...item,
+              title: nextTitle,
+              updatedAt: { seconds: Math.floor(Date.now() / 1000) }
+            };
+          }
+          return item;
+        });
+        localStorage.setItem("kantholipi_local_transcriptions", JSON.stringify(updatedList));
+        setTranscriptions(updatedList);
+        return;
+      }
+
       const docRef = doc(db, "transcriptions", id);
       await updateDoc(docRef, {
         title: nextTitle,
@@ -205,6 +308,11 @@ export default function App() {
   // Callback: Toggle public sharing
   const handleTogglePublic = async (id: string, isPublic: boolean) => {
     try {
+      if (user?.uid === "guest-user-id") {
+        alert("শেয়ারিং ও ক্লাউড সিঙ্ক ব্যবহার করতে দয়া করে অ্যাকাউন্টে প্রবেশ (লগইন) করুন। অতিথি মোডে এই লিপিটি শুধুমাত্র আপনার ব্রাউজারে সংরক্ষিত থাকবে।");
+        return;
+      }
+
       const docRef = doc(db, "transcriptions", id);
       await updateDoc(docRef, {
         isPublic: isPublic,
@@ -221,6 +329,14 @@ export default function App() {
       if (selectedRecord?.id === id) {
         setSelectedRecord(null);
       }
+
+      if (user?.uid === "guest-user-id") {
+        const updatedList = transcriptions.filter(item => item.id !== id);
+        localStorage.setItem("kantholipi_local_transcriptions", JSON.stringify(updatedList));
+        setTranscriptions(updatedList);
+        return;
+      }
+
       await deleteDoc(doc(db, "transcriptions", id));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `transcriptions/${id}`);
@@ -230,6 +346,10 @@ export default function App() {
   // Collaboration Invitation handlers
   const handleAddCollaborator = async (email: string) => {
     if (!collabModalRecord) return;
+    if (user?.uid === "guest-user-id") {
+      alert("সহযোগিতা ও অ্যাক্সেস কন্ট্রোল শুধুমাত্র ক্লাউড সেশনে সম্ভব। দয়া করে লগইন করুন।");
+      return;
+    }
     try {
       const currentCollaborators = collabModalRecord.collaborators || [];
       const updatedCollabs = [...currentCollaborators, email.toLowerCase()];
@@ -252,6 +372,10 @@ export default function App() {
 
   const handleRemoveCollaborator = async (email: string) => {
     if (!collabModalRecord) return;
+    if (user?.uid === "guest-user-id") {
+      alert("সহযোগিতা ও অ্যাক্সেস কন্ট্রোল শুধুমাত্র ক্লাউড সেশনে সম্ভব। দয়া করে লগইন করুন।");
+      return;
+    }
     try {
       const currentCollaborators = collabModalRecord.collaborators || [];
       const updatedCollabs = currentCollaborators.filter(c => c.toLowerCase() !== email.toLowerCase());
@@ -381,24 +505,49 @@ export default function App() {
 
                   {/* Collaboration and features walkthrough */}
                   <div id="capabilities-guide-card" className="bg-gray-900 border border-gray-850 rounded-2xl p-5 shadow-lg flex flex-col gap-4 text-xs text-slate-300">
-                    <h3 className="font-semibold text-slate-100 flex items-center gap-1.5 text-xs text-slate-100 uppercase tracking-wide">
-                      <Cloud className="w-4 h-4 text-emerald-400" />
-                      <span>রিয়েল-টাইম ক্লাউড স্টোরেজ গাইড</span>
-                    </h3>
-                    <ul className="flex flex-col gap-2 font-sans pl-1">
-                      <li className="flex gap-2">
-                        <ChevronRight className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span><strong>স্বয়ংক্রিয় ক্লাউড সিঙ্ক:</strong> প্রতিটি রেকর্ড শেষ হওয়া মাত্রই সরাসরি গুগল ফায়ারস্টোরে সংরক্ষিত হয়।</span>
-                      </li>
-                      <li className="flex gap-2">
-                        <ChevronRight className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span><strong>অন্যান্য ডিভাইসে অ্যাক্সেস:</strong> একই অ্যাকাউন্ট দিয়ে যেকোনো ফোন, ট্যাবলেট বা ল্যাপটপ থেকে লিপিগুলো অ্যাক্সেস করতে পারবেন।</span>
-                      </li>
-                      <li className="flex gap-2">
-                        <ChevronRight className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span><strong>সহযোগীদের সাথে ট্রান্সক্রিপশন:</strong> 'সহযোগী' অপশন ব্যবহার করে অন্যদের ইমেইল যুক্ত করুন। তারা আপনার অডিও টেক্সট এডিট বা পরিবর্তন করতে পারবে!</span>
-                      </li>
-                    </ul>
+                    {user.uid === "guest-user-id" ? (
+                      <>
+                        <h3 className="font-semibold text-slate-100 flex items-center gap-1.5 text-xs uppercase tracking-wide">
+                          <Cloud className="w-4 h-4 text-amber-400" />
+                          <span>গেস্ট সেশন গাইড (লোকাল মোড)</span>
+                        </h3>
+                        <ul className="flex flex-col gap-2 font-sans pl-1">
+                          <li className="flex gap-2">
+                            <ChevronRight className="w-4 h-4 text-amber-500 shrink-0" />
+                            <span><strong>লোকাল সংরক্ষণ:</strong> আপনার লিপিগুলো ব্রাউজারে লোকাল স্টোরেজে সুরক্ষিত আছে, উইন্ডো বন্ধ করলেও হারিয়ে যাবে না।</span>
+                          </li>
+                          <li className="flex gap-2">
+                            <ChevronRight className="w-4 h-4 text-amber-500 shrink-0" />
+                            <span><strong>সহজ ডাউনলোড:</strong> আপনার লেখাগুলো যেকোনো সময় টেক্সট ফাইল হিসেবে সেভ বা ডাউনলোড করতে পারেন।</span>
+                          </li>
+                          <li className="flex gap-2">
+                            <ChevronRight className="w-4 h-4 text-amber-500 shrink-0" />
+                            <span><strong>ক্লাউড ব্যাকআপ পেতে:</strong> একাধিক ডিভাইসে সিঙ্ক ও বন্ধুদের সাথে শেয়ার করার জন্য গুগল অ্যাকাউন্ট দিয়ে লগইন করতে পারেন।</span>
+                          </li>
+                        </ul>
+                      </>
+                    ) : (
+                      <>
+                        <h3 className="font-semibold text-slate-100 flex items-center gap-1.5 text-xs text-slate-100 uppercase tracking-wide">
+                          <Cloud className="w-4 h-4 text-emerald-400" />
+                          <span>রিয়েল-টাইম ক্লাউড স্টোরেজ গাইড</span>
+                        </h3>
+                        <ul className="flex flex-col gap-2 font-sans pl-1">
+                          <li className="flex gap-2">
+                            <ChevronRight className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <span><strong>স্বয়ংক্রিয় ক্লাউড সিঙ্ক:</strong> প্রতিটি রেকর্ড শেষ হওয়া মাত্রই সরাসরি গুগল ফায়ারস্টোরে সংরক্ষিত হয়।</span>
+                          </li>
+                          <li className="flex gap-2">
+                            <ChevronRight className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <span><strong>অন্যান্য ডিভাইসে অ্যাক্সেস:</strong> একই অ্যাকাউন্ট দিয়ে যেকোনো ফোন, ট্যাবলেট বা ল্যাপটপ থেকে লিপিগুলো অ্যাক্সেস করতে পারবেন।</span>
+                          </li>
+                          <li className="flex gap-2">
+                            <ChevronRight className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <span><strong>সহযোগীদের সাথে ট্রান্সক্রিপশন:</strong> 'সহযোগী' অপশন ব্যবহার করে অন্যদের ইমেইল যুক্ত করুন। তারা আপনার অডিও টেক্সট এডিট বা পরিবর্তন করতে পারবে!</span>
+                          </li>
+                        </ul>
+                      </>
+                    )}
                   </div>
 
                 </div>
@@ -442,8 +591,17 @@ export default function App() {
 
                       {/* Display grid/list toggle or filter tools */}
                       <span className="text-[10px] text-slate-500 font-mono tracking-wider flex items-center gap-1 uppercase select-none">
-                        <Database className="w-3.5 h-3.5 text-teal-400/80" />
-                        <span>Firestore সিঙ্কড</span>
+                        {user.uid === "guest-user-id" ? (
+                          <>
+                            <Database className="w-3.5 h-3.5 text-amber-400/80 animate-pulse" />
+                            <span>लोकल সেশন • অফলাইন স্টোরেজ</span>
+                          </>
+                        ) : (
+                          <>
+                            <Database className="w-3.5 h-3.5 text-teal-400/80" />
+                            <span>Firestore সিঙ্কড</span>
+                          </>
+                        )}
                       </span>
                     </div>
 
@@ -528,14 +686,25 @@ export default function App() {
                   </div>
                 </div>
 
-                <button
-                  id="hero-get-started-btn"
-                  onClick={handleLogin}
-                  className="mt-4 flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-gray-950 text-sm font-bold rounded-xl shadow-xl shadow-emerald-500/5 transition duration-150 hover:scale-[1.03] cursor-pointer"
-                >
-                  <LogIn className="w-5 h-5" />
-                  <span>এখনই শুরু করুন</span>
-                </button>
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-6">
+                  <button
+                    id="hero-get-started-btn"
+                    onClick={handleLogin}
+                    className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-gray-950 text-sm font-bold rounded-xl shadow-xl shadow-emerald-500/5 transition duration-150 hover:scale-[1.03] cursor-pointer"
+                  >
+                    <LogIn className="w-5 h-5" />
+                    <span>গুগল আইডি দিয়ে প্রবেশ করুন</span>
+                  </button>
+
+                  <button
+                    id="hero-guest-btn"
+                    onClick={handleStartGuestSession}
+                    className="flex items-center gap-2 px-6 py-3 bg-gray-900 border border-emerald-500/30 text-emerald-400 hover:border-emerald-500 hover:bg-emerald-500/10 text-sm font-bold rounded-xl transition duration-150 hover:scale-[1.03] cursor-pointer"
+                  >
+                    <Mic className="w-5 h-5" />
+                    <span>সাইন-ইন ছাড়া ব্যবহার করুন</span>
+                  </button>
+                </div>
 
               </div>
             )}
