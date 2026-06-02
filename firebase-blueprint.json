@@ -1,0 +1,72 @@
+{
+  "entities": {
+    "transcription": {
+      "title": "Transcription",
+      "description": "Represents an audio transcription record in Bangla",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "The custom title given to this transcription"
+        },
+        "text": {
+          "type": "string",
+          "description": "The transcribed Bangla text content"
+        },
+        "audioDataUrl": {
+          "type": "string",
+          "description": "Optional base64 audio data URL for playing the audio back"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The timestamp of creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The timestamp of the last revision"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "The Google User ID of the transcription owner"
+        },
+        "ownerName": {
+          "type": "string",
+          "description": "The display name of the owner"
+        },
+        "ownerEmail": {
+          "type": "string",
+          "description": "The email address of the owner"
+        },
+        "collaborators": {
+          "type": "array",
+          "description": "List of user emails invited to collaborate on this document"
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Whether the transcription is publicly accessible via a link"
+        },
+        "audioDuration": {
+          "type": "number",
+          "description": "Duration of the transcribed audio in seconds"
+        }
+      },
+      "required": [
+        "title",
+        "text",
+        "createdAt",
+        "updatedAt",
+        "ownerId",
+        "ownerName",
+        "ownerEmail"
+      ]
+    }
+  },
+  "firestore": {
+    "/transcriptions/{transcriptionId}": {
+      "schema": "transcription",
+      "description": "Collection of Bangla transcriptions shared among collaborators"
+    }
+  }
+}

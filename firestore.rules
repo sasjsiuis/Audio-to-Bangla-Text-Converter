@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ID validation to prevent path poisoning or massive strings
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && (request.auth.token.email_verified == true);
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Helper to validate the transcription structure
+    function isValidTranscription(data) {
+      return data.title is string 
+        && data.title.size() <= 200 
+        && data.text is string 
+        && data.text.size() <= 1048576  // 1MB limit for safety
+        && (!data.keys().hasAll(['audioDataUrl']) || (data.audioDataUrl is string && data.audioDataUrl.size() <= 2097152)) // 2MB limit for audio URL if present
+        && data.ownerId is string 
+        && data.ownerId == request.auth.uid 
+        && data.ownerName is string 
+        && data.ownerName.size() <= 200
+        && data.ownerEmail is string 
+        && data.ownerEmail.size() <= 200
+        && (!data.keys().hasAll(['collaborators']) || (data.collaborators is list && data.collaborators.size() <= 100))
+        && (!data.keys().hasAll(['isPublic']) || data.isPublic is bool)
+        && (!data.keys().hasAll(['audioDuration']) || (data.audioDuration is number && data.audioDuration >= 0));
+    }
+
+    match /transcriptions/{transcriptionId} {
+      // Allow read if user is signed in AND (either owner, collaborator, or document is public)
+      allow get: if isSignedIn() && (
+        resource.data.ownerId == request.auth.uid || 
+        (resource.data.keys().hasAll(['collaborators']) && request.auth.token.email in resource.data.collaborators) || 
+        (resource.data.keys().hasAll(['isPublic']) && resource.data.isPublic == true)
+      );
+
+      // Allow queries only if filtered by ownership, collaboration, or is public
+      allow list: if isSignedIn() && (
+        resource.data.ownerId == request.auth.uid || 
+        (resource.data.keys().hasAll(['collaborators']) && request.auth.token.email in resource.data.collaborators) || 
+        (resource.data.keys().hasAll(['isPublic']) && resource.data.isPublic == true)
+      );
+
+      allow create: if isSignedIn() 
+        && isEmailVerified()
+        && isValidId(transcriptionId) 
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isValidTranscription(incoming())
+        && incoming().keys().hasAll(['title', 'text', 'createdAt', 'updatedAt', 'ownerId', 'ownerName', 'ownerEmail']) 
+        && incoming().keys().size() <= 11;
+
+      allow update: if isSignedIn() 
+        && isEmailVerified()
+        && isValidId(transcriptionId)
+        && incoming().updatedAt == request.time
+        && incoming().createdAt == existing().createdAt  // Immutable field
+        && incoming().ownerId == existing().ownerId      // Immutable field
+        && incoming().ownerEmail == existing().ownerEmail // Immutable field
+        && isValidTranscription(incoming())
+        && (
+          // Check update permissions (only Owner can modify details or collaborators. Or collaborators can modify the transcribed text)
+          // Action 1: Owner update (all mutable fields)
+          (existing().ownerId == request.auth.uid) ||
+          // Action 2: Collaborator update (can only modify text/updatedAt)
+          (
+            existing().keys().hasAll(['collaborators']) && 
+            request.auth.token.email in existing().collaborators && 
+            incoming().diff(existing()).affectedKeys().hasOnly(['text', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isSignedIn() 
+        && isEmailVerified()
+        && isValidId(transcriptionId)
+        && resource.data.ownerId == request.auth.uid; // Only the owner can delete
+    }
+  }
+}

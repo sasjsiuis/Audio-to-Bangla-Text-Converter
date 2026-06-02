@@ -1,0 +1,10 @@
+{
+  "name": "Audio to Bangla Text Converter",
+  "description": "Convert recorded speech or audio files into Bangla text in real time, with secure cloud synchronization and multi-device collaboration.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
