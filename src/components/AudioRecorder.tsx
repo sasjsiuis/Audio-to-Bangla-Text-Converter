@@ -244,12 +244,32 @@ export default function AudioRecorder({ onTranscribeSuccess, isTranscribing }: A
         }),
       });
 
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.error || "সার্ভার ট্রান্সক্রাইব করতে ব্যর্থ হয়েছে।");
+      let resData: any = null;
+      const contentType = response.headers.get("content-type");
+
+      if (contentType && contentType.includes("application/json")) {
+        try {
+          resData = await response.json();
+        } catch (jsonErr) {
+          console.error("JSON parsing failed:", jsonErr);
+        }
       }
 
-      const resData = await response.json();
+      if (!resData) {
+        const textResponse = await response.text().catch(() => "");
+        console.error("Non-JSON Server response:", textResponse);
+        if (response.status === 404) {
+          throw new Error("সার্ভার রুটটি পাওয়া যায়নি (404 Error)। অনুগ্রহ করে নিশ্চিত করুন যে ডেভ সার্ভারটি সঠিকভাবে সচল আছে।");
+        } else if (response.status === 502 || response.status === 503 || response.status === 504) {
+          throw new Error("সার্ভিসটি এই মুহূর্তে সাময়িকভাবে অনুপলব্ধ বা টাইমআউট হয়েছে (Gateway/Server Error)। অনুগ্রহ করে কিছু সময় পর আবার চেষ্টা করুন।");
+        }
+        throw new Error(`সার্ভার থেকে অপ্রত্যাশিত রেসপন্স এসেছে (স্ট্যাটাস: ${response.status})। অনুগ্রহ করে আপনার জেমিনি এপিআই কী (GEMINI_API_KEY) সেটিংস থেকে কনফিগার করা আছে কিনা পরীক্ষা করুন।`);
+      }
+
+      if (!response.ok) {
+        throw new Error(resData.error || "সার্ভার ট্রান্সক্রাইব করতে ব্যর্থ হয়েছে।");
+      }
+
       onTranscribeSuccess(resData.transcription, duration, audioDataUrl);
       setStatus(RecordStatus.CONVERTED);
     } catch (err: any) {
